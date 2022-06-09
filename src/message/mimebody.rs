@@ -144,6 +144,18 @@ impl EmailFormat for SinglePart {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ProtectedHeaders {
+    V1,
+    None
+}
+
+impl Default for ProtectedHeaders {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// The kind of multipart
 #[derive(Debug, Clone)]
 pub enum MultiPartKind {
@@ -163,10 +175,10 @@ pub enum MultiPartKind {
     Related,
 
     /// Encrypted kind for encrypted messages
-    Encrypted { protocol: String },
+    Encrypted { protocol: String, protected_headers: ProtectedHeaders },
 
     /// Signed kind for signed messages
-    Signed { protocol: String, micalg: String },
+    Signed { protocol: String, micalg: String, protected_headers: ProtectedHeaders },
 }
 
 /// Create a random MIME boundary.
@@ -190,9 +202,12 @@ impl MultiPartKind {
             },
             boundary,
             match self {
-                Self::Encrypted { protocol } => format!("; protocol=\"{}\"", protocol),
-                Self::Signed { protocol, micalg } =>
+                Self::Encrypted { protocol, protected_headers: ProtectedHeaders::None } => format!("; protocol=\"{}\"", protocol),
+                Self::Encrypted { protocol, protected_headers: ProtectedHeaders::V1 } => format!("; protocol=\"{}\"; protected-headers=\"v1\"", protocol),
+                Self::Signed { protocol, micalg, protected_headers: ProtectedHeaders::None } =>
                     format!("; protocol=\"{}\"; micalg=\"{}\"", protocol, micalg),
+                Self::Signed { protocol, micalg, protected_headers: ProtectedHeaders::V1 } =>
+                    format!("; protocol=\"{}\"; micalg=\"{}\"; protected-headers=\"v1\"", protocol, micalg),
                 _ => String::new(),
             }
         )
@@ -209,10 +224,20 @@ impl MultiPartKind {
                 m.get_param("micalg").map(|micalg| Self::Signed {
                     protocol: p.as_str().to_owned(),
                     micalg: micalg.as_str().to_owned(),
+                    protected_headers: m.get_param("protected-headers")
+                        .and_then(|protected_headers| Some(match protected_headers.as_str() {
+                            "v1" => ProtectedHeaders::V1,
+                            _ => ProtectedHeaders::None,
+                        })).unwrap_or_default(),
                 })
             }),
             "encrypted" => m.get_param("protocol").map(|p| Self::Encrypted {
                 protocol: p.as_str().to_owned(),
+                protected_headers: m.get_param("protected-headers")
+                    .and_then(|protected_headers| Some(match protected_headers.as_str() {
+                        "v1" => ProtectedHeaders::V1,
+                        _ => ProtectedHeaders::None,
+                    })).unwrap_or_default(),
             }),
             _ => None,
         }
@@ -317,14 +342,28 @@ impl MultiPart {
     ///
     /// Shortcut for `MultiPart::builder().kind(MultiPartKind::Encrypted{ protocol })`
     pub fn encrypted(protocol: String) -> MultiPartBuilder {
-        MultiPart::builder().kind(MultiPartKind::Encrypted { protocol })
+        MultiPart::builder().kind(MultiPartKind::Encrypted { protocol, protected_headers: Default::default() })
+    }
+
+    /// Creates encrypted multipart builder
+    ///
+    /// Shortcut for `MultiPart::builder().kind(MultiPartKind::Encrypted{ protocol })`
+    pub fn encrypted_protected_headers(protocol: String, protected_headers: ProtectedHeaders) -> MultiPartBuilder {
+        MultiPart::builder().kind(MultiPartKind::Encrypted { protocol, protected_headers, })
     }
 
     /// Creates signed multipart builder
     ///
     /// Shortcut for `MultiPart::builder().kind(MultiPartKind::Signed{ protocol, micalg })`
     pub fn signed(protocol: String, micalg: String) -> MultiPartBuilder {
-        MultiPart::builder().kind(MultiPartKind::Signed { protocol, micalg })
+        MultiPart::builder().kind(MultiPartKind::Signed { protocol, micalg, protected_headers: Default::default() })
+    }
+
+    /// Creates signed multipart builder with `protected-headers`
+    ///
+    /// Shortcut for `MultiPart::builder().kind(MultiPartKind::Signed{ protocol, micalg })`
+    pub fn signed_protected_headers(protocol: String, micalg: String, protected_headers: ProtectedHeaders) -> MultiPartBuilder {
+        MultiPart::builder().kind(MultiPartKind::Signed { protocol, micalg, protected_headers })
     }
 
     /// Alias for HTML and plain text versions of an email
@@ -549,6 +588,63 @@ mod test {
             )
         );
     }
+
+    #[test]
+    fn multi_part_encrypted_protected_headers() {
+        let part = MultiPart::encrypted_protected_headers(
+            "application/pgp-encrypted".to_owned(),
+            ProtectedHeaders::V1
+        )
+            .boundary("0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1")
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::parse("application/pgp-encrypted").unwrap())
+                    .body(String::from("Version: 1")),
+            )
+            .singlepart(
+                SinglePart::builder()
+                    .header(
+                        ContentType::parse("application/octet-stream; name=\"encrypted.asc\"")
+                            .unwrap(),
+                    )
+                    .header(header::ContentDisposition::inline_with_name(
+                        "encrypted.asc",
+                    ))
+                    .body(String::from(concat!(
+                    "-----BEGIN PGP MESSAGE-----\r\n",
+                    "wV4D0dz5vDXklO8SAQdA5lGX1UU/eVQqDxNYdHa7tukoingHzqUB6wQssbMfHl8w\r\n",
+                    "...\r\n",
+                    "-----END PGP MESSAGE-----\r\n"
+                    ))),
+            );
+
+        assert_eq!(
+            String::from_utf8(part.formatted()).unwrap(),
+            concat!(
+            "Content-Type: multipart/encrypted;\r\n",
+            " boundary=\"0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\";\r\n",
+            " protocol=\"application/pgp-encrypted\"; protected-headers=\"v1\"\r\n",
+            "\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\r\n",
+            "Content-Type: application/pgp-encrypted\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
+            "Version: 1\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\r\n",
+            "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n",
+            "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
+            "-----BEGIN PGP MESSAGE-----\r\n",
+            "wV4D0dz5vDXklO8SAQdA5lGX1UU/eVQqDxNYdHa7tukoingHzqUB6wQssbMfHl8w\r\n",
+            "...\r\n",
+            "-----END PGP MESSAGE-----\r\n",
+            "\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1--\r\n"
+            )
+        );
+    }
+
     #[test]
     fn multi_part_signed() {
         let part = MultiPart::signed(
