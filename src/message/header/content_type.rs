@@ -3,8 +3,7 @@ use std::{
     fmt::{self, Display},
     str::FromStr,
 };
-
-use mime::Mime;
+use mime::{FromStrError, Mime};
 
 use super::{Header, HeaderName, HeaderValue};
 use crate::BoxError;
@@ -64,6 +63,22 @@ impl FromStr for ContentType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
+    }
+}
+
+impl TryFrom<HeaderValue> for ContentType {
+    type Error = FromStrError;
+
+    fn try_from(value: HeaderValue) -> Result<Self, Self::Error> {
+        Ok(ContentType::from_mime(value.raw_value.parse()?))
+    }
+}
+
+impl TryFrom<&str> for ContentType {
+    type Error = FromStrError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(ContentType::from_mime(value.parse()?))
     }
 }
 
@@ -152,7 +167,7 @@ mod test {
     use pretty_assertions::assert_eq;
 
     use super::ContentType;
-    use crate::message::header::{HeaderName, HeaderValue, Headers};
+    use crate::message::header::{HeaderName, HeaderValue, Headers, Header};
 
     #[test]
     fn format_content_type() {
@@ -184,11 +199,25 @@ mod test {
 
         assert_eq!(headers.get::<ContentType>(), Some(ContentType::TEXT_PLAIN));
 
+        let v = HeaderValue::new(
+            HeaderName::new_from_ascii_str("Content-Type"),
+            r#"text/plain; charset=utf-8; protected-headers="v1""#.to_string(),
+        );
+
+        assert_eq!(v.encoded_value, "text/plain; charset=utf-8; protected-headers=\"v1\"".to_string());
+
+        headers.insert_raw(v);
+
+        assert_eq!(headers.to_string(), "Content-Type: text/plain; charset=utf-8; protected-headers=\"v1\"\r\n".to_string());
+
         headers.insert_raw(HeaderValue::new(
             HeaderName::new_from_ascii_str("Content-Type"),
             "text/html; charset=utf-8".to_string(),
         ));
 
         assert_eq!(headers.get::<ContentType>(), Some(ContentType::TEXT_HTML));
+
+        let content_type = "text/plain; charset=utf-8; protected-headers=\"v1\"".parse::<ContentType>().unwrap();
+        assert_eq!(content_type.display().raw_value, "text/plain; charset=utf-8; protected-headers=\"v1\"")
     }
 }

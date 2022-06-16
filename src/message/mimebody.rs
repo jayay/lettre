@@ -317,7 +317,8 @@ impl MultiPart {
     ///
     /// Shortcut for `MultiPart::builder().kind(MultiPartKind::Encrypted{ protocol })`
     pub fn encrypted(protocol: String) -> MultiPartBuilder {
-        MultiPart::builder().kind(MultiPartKind::Encrypted { protocol })
+        let content_type: ContentType = format!("multipart/encrypted; charset=utf-8; protected-headers=\"v1\"; boundary=\"0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\"; protocol=\"{protocol}\"").parse::<ContentType>().unwrap();
+        MultiPart::builder().header(content_type)
     }
 
     /// Creates signed multipart builder
@@ -549,6 +550,59 @@ mod test {
             )
         );
     }
+
+    #[test]
+    fn multi_part_encrypted_protected_headers() {
+        let part = MultiPart::encrypted("application/pgp-encrypted".to_owned())
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::parse("application/pgp-encrypted").unwrap())
+                    .body(String::from("Version: 1")),
+            )
+            .singlepart(
+                SinglePart::builder()
+                    .header(
+                        ContentType::parse("application/octet-stream; name=\"encrypted.asc\"")
+                            .unwrap(),
+                    )
+                    .header(header::ContentDisposition::inline_with_name(
+                        "encrypted.asc",
+                    ))
+                    .body(String::from(concat!(
+                    "-----BEGIN PGP MESSAGE-----\r\n",
+                    "wV4D0dz5vDXklO8SAQdA5lGX1UU/eVQqDxNYdHa7tukoingHzqUB6wQssbMfHl8w\r\n",
+                    "...\r\n",
+                    "-----END PGP MESSAGE-----\r\n"
+                    ))),
+            );
+
+        assert_eq!(
+            String::from_utf8(part.formatted()).unwrap(),
+            concat!(
+            "Content-Type: multipart/encrypted; charset=utf-8; protected-headers=\"v1\";\r\n",
+            " boundary=\"0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\";\r\n",
+            " protocol=\"application/pgp-encrypted\"\r\n",
+            "\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\r\n",
+            "Content-Type: application/pgp-encrypted\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
+            "Version: 1\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1\r\n",
+            "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n",
+            "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
+            "-----BEGIN PGP MESSAGE-----\r\n",
+            "wV4D0dz5vDXklO8SAQdA5lGX1UU/eVQqDxNYdHa7tukoingHzqUB6wQssbMfHl8w\r\n",
+            "...\r\n",
+            "-----END PGP MESSAGE-----\r\n",
+            "\r\n",
+            "--0oVZ2r6AoLAhLlb0gPNSKy6BEqdS2IfwxrcbUuo1--\r\n"
+            )
+        );
+    }
+
     #[test]
     fn multi_part_signed() {
         let part = MultiPart::signed(
